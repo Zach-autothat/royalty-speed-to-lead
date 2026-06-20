@@ -76,7 +76,7 @@ export default function SpeedToLead(props: { dataUrl: string }) {
     const font = <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet" />
 
     if (!dataUrl || dataUrl.indexOf("YOUR-HOST") >= 0)
-        return <div style={wrap}>{font}<div style={{ color: C.muted, fontSize: 13 }}>Set the <b>Data URL</b> property to your Worker URL to load the dashboard.</div></div>
+        return <div style={wrap}>{font}<div style={{ color: C.muted, fontSize: 13 }}>Set the <b>Data URL</b> property (right-hand panel) to load the dashboard.</div></div>
     if (err) return <div style={wrap}>{font}<div style={{ color: C.red, fontSize: 13 }}>Couldn’t load data: {err}</div></div>
     if (!s || !win) return <div style={wrap}>{font}<div style={{ color: C.faint, fontSize: 13 }}>Loading…</div></div>
 
@@ -198,5 +198,5 @@ export default function SpeedToLead(props: { dataUrl: string }) {
 }
 
 addPropertyControls(SpeedToLead, {
-    dataUrl: { type: ControlType.String, title: "Data URL", defaultValue: "https://YOUR-HOST/" },
+    dataUrl: { type: ControlType.String, title: "Data URL", defaultValue: "https://zach-autothat.github.io/royalty-speed-to-lead/summary.json" },
 })
