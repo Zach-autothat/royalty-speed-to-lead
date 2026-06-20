@@ -1,0 +1,38 @@
+name: Refresh Speed to Lead
+
+on:
+  schedule:
+    - cron: "0 * * * *"        # every hour, on the hour (UTC)
+  workflow_dispatch: {}         # also lets us run it on demand
+
+permissions:
+  contents: write               # so the job can commit the refreshed summary
+
+concurrency:
+  group: refresh-speed-to-lead
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install tzdata        # IANA timezone db for business-hours math
+      - name: Pull GHL data and build the summary
+        env:
+          GHL_TOKEN: ${{ secrets.GHL_TOKEN }}
+          GHL_LOCATION_ID: ${{ secrets.GHL_LOCATION_ID }}
+        run: |
+          python3 refresh.py 30d
+          mkdir -p docs
+          cp out/summary.json docs/summary.json
+      - name: Publish refreshed summary
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/summary.json
+          git diff --staged --quiet || git commit -m "chore: refresh summary $(date -u +%FT%TZ)"
+          git push

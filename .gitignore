@@ -1,0 +1,13 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+out/
+*.local
+.vercel
+worker/
+docs/.nojekyll
+.claude/
+.DS_Store
