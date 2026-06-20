@@ -167,6 +167,10 @@ export default function SpeedToLead(props: { dataUrl: string }) {
         const under3 = Math.max(0, d.dials - d.over3)
         const touchMax = Math.max(1, d.dials, d.texts, d.emails)
         const distMax = Math.max(1, ...d.touchDist)
+        const spDist = sp.dist || []
+        const spTot = spDist.reduce((x: number, y: number) => x + y, 0) || 1
+        const spPeak = Math.max(1, ...spDist)
+        const skewed = sp.avg != null && sp.median != null && sp.avg > sp.median * 2
         return (
             <div style={wrap}>{font}{header}
                 <button onClick={() => setRep(null)} style={{ background: "transparent", border: "none", color: C.accent, fontSize: 13, fontWeight: 600, cursor: "pointer", padding: 0, marginBottom: 14 }}>← All reps</button>
@@ -213,26 +217,38 @@ export default function SpeedToLead(props: { dataUrl: string }) {
                     </Card>
                 </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-                    <Card>
-                        <Label>Speed to first contact</Label>
-                        <div style={{ display: "flex", gap: 10 }}>
-                            <div style={{ flex: 1, background: C.accentBg, borderRadius: 10, padding: "12px 14px" }}>
-                                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase" }}>Average</div>
-                                <div style={{ fontSize: 20, fontFamily: "'Sora', sans-serif", fontWeight: 800, color: C.accent }}>{fmtDur(sp.avg)}</div>
+                <Card style={{ marginBottom: 16 }}>
+                    <Label right={<span style={{ fontSize: 11, color: C.faint }}>{clock === "bh" ? "business-hours clock" : "raw wall-clock"}</span>}>Speed to first contact — across all {sp.leads || 0} leads</Label>
+                    <div style={{ display: "grid", gridTemplateColumns: "0.9fr 2.1fr", gap: 18, alignItems: "start" }}>
+                        <div>
+                            <div style={{ background: C.greenBg, borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+                                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Median (typical)</div>
+                                <div style={{ fontSize: 22, fontFamily: "'Sora', sans-serif", fontWeight: 800, color: C.green }}>{fmtDur(sp.median)}</div>
                             </div>
-                            <div style={{ flex: 1, background: C.greenBg, borderRadius: 10, padding: "12px 14px" }}>
-                                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase" }}>Median</div>
-                                <div style={{ fontSize: 20, fontFamily: "'Sora', sans-serif", fontWeight: 800, color: C.green }}>{fmtDur(sp.median)}</div>
+                            <div style={{ background: C.blueBg, borderRadius: 10, padding: "12px 14px", marginBottom: 8 }}>
+                                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>90% of leads within</div>
+                                <div style={{ fontSize: 22, fontFamily: "'Sora', sans-serif", fontWeight: 800, color: C.blue }}>{fmtDur(sp.p90)}</div>
+                            </div>
+                            <div style={{ background: C.bg, borderRadius: 10, padding: "12px 14px" }}>
+                                <div style={{ fontSize: 11, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em" }}>Average</div>
+                                <div style={{ fontSize: 22, fontFamily: "'Sora', sans-serif", fontWeight: 800, color: C.faint }}>{fmtDur(sp.avg)}</div>
+                                {skewed && <div style={{ fontSize: 11, color: C.amber, marginTop: 2 }}>↑ skewed by slow outliers</div>}
                             </div>
                         </div>
-                        <div style={{ fontSize: 11, color: C.faint, marginTop: 10 }}>{clock === "bh" ? "Business-hours clock" : "Raw wall-clock"}. {sp.noResp || 0} of {sp.leads || 0} leads got no manual contact.</div>
-                    </Card>
-                    <Card>
-                        <Label right={<span style={{ fontSize: 11, color: C.faint }}>{tz}</span>}>When they reach out — day × hour</Label>
-                        <HeatGrid grid={d.heatmap} />
-                    </Card>
-                </div>
+                        <div>
+                            <div style={{ fontSize: 12, color: C.muted, marginBottom: 8 }}>How fast every lead was contacted</div>
+                            {spDist.map((v: number, i: number) => (
+                                <Bar key={i} label={s.buckets[i]} value={v} display={`${v} · ${fmtPct(pct(v, spTot))}`} max={spPeak} color={BUCKET_COLORS[i]} />
+                            ))}
+                            <div style={{ fontSize: 11, color: C.faint, marginTop: 8 }}>Most leads cluster in the fast buckets; the thin tail on the right is what pulls the average up — median and the 90% mark ignore it.</div>
+                        </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: C.faint, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${C.border}` }}>{sp.noResp || 0} of {sp.leads || 0} leads got no manual contact at all.</div>
+                </Card>
+                <Card>
+                    <Label right={<span style={{ fontSize: 11, color: C.faint }}>{tz}</span>}>When they reach out — day × hour</Label>
+                    <HeatGrid grid={d.heatmap} />
+                </Card>
                 <div style={{ fontSize: 11, color: C.faint, marginTop: 14 }}>Covers leads received in the selected window and every manual call/text/email to them. Email is rarely manual.</div>
             </div>
         )
@@ -307,6 +323,7 @@ export default function SpeedToLead(props: { dataUrl: string }) {
                             <div style={{ fontSize: 11, color: C.faint }}>what a typical lead waits</div>
                         </div>
                     </div>
+                    <div style={{ fontSize: 12, color: C.blue, fontWeight: 600, marginBottom: 10 }}>90% of leads contacted within {fmtDur(a.p90)}</div>
                     {a.dist.map((v: number, i: number) => (
                         <Bar key={i} label={s.buckets[i]} value={v} display={`${v} · ${fmtPct(pct(v, distTot))}`} max={distPeak} color={BUCKET_COLORS[i]} />
                     ))}

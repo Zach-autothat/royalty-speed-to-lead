@@ -28,6 +28,18 @@ def _avg(a):
     return _mean(a) if a else None
 
 
+def _pctl(a, q):
+    """Nearest-rank percentile (q in 0..1). Outlier-robust, unlike the mean."""
+    if not a:
+        return None
+    b = sorted(a)
+    return b[min(len(b) - 1, int(round(q * (len(b) - 1))))]
+
+
+def _bucketize(times):
+    return [sum(1 for x in times if lo <= x < hi) for _, lo, hi in BUCKETS]
+
+
 def _clock_agg(leads, field):
     resp = [l for l in leads if l["responded"]]
     times = [l[field] for l in resp]
@@ -42,17 +54,17 @@ def _clock_agg(leads, field):
             "rep": rep, "leads": len(g),
             "share": round(100 * len(g) / len(leads), 1) if leads else 0,
             "noResp": len(g) - len(gr),
-            "avg": _avg(t), "median": _med(t),
+            "avg": _avg(t), "median": _med(t), "p90": _pctl(t, 0.9),
+            "dist": _bucketize(t),
         })
     per_rep.sort(key=lambda r: (r["rep"] == "Unassigned", r["avg"] is None, r["avg"] or 0))
-    dist = [sum(1 for x in times if lo <= x < hi) for _, lo, hi in BUCKETS]
     calls = sum(1 for l in resp if l["channel"] == "TYPE_CALL")
     texts = sum(1 for l in resp if l["channel"] == "TYPE_SMS")
     return {
         "total": len(leads), "responded": len(resp), "noResp": len(leads) - len(resp),
         "rate": round(100 * len(resp) / len(leads), 1) if leads else 0,
-        "avg": _avg(times), "median": _med(times),
-        "calls": calls, "texts": texts, "dist": dist, "perRep": per_rep,
+        "avg": _avg(times), "median": _med(times), "p90": _pctl(times, 0.9),
+        "calls": calls, "texts": texts, "dist": _bucketize(times), "perRep": per_rep,
     }
 
 
