@@ -49,13 +49,15 @@ class GHLClient:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # Retry on rate-limit / transient server errors
-            if e.code in (429, 500, 502, 503, 504) and _tries < 5:
+            detail = e.read().decode("utf-8", "ignore")
+            # Retry on rate-limit / transient server errors, plus GHL's gateway
+            # timeout that masquerades as a 401 ("Command timed out").
+            transient = e.code in (429, 500, 502, 503, 504) or "timed out" in detail.lower()
+            if transient and _tries < 5:
                 wait = float(e.headers.get("Retry-After", 0)) or (1.5 ** _tries)
                 time.sleep(wait)
                 return self._request(method, path, params, body, _tries + 1)
-            detail = e.read().decode("utf-8", "ignore")[:300]
-            raise GHLError(f"{e.code} {method} {path} :: {detail}") from None
+            raise GHLError(f"{e.code} {method} {path} :: {detail[:300]}") from None
         except urllib.error.URLError as e:
             if _tries < 5:
                 time.sleep(1.5 ** _tries)
