@@ -13,6 +13,27 @@ with net-new inbound leads, with raw and business-hours-adjusted clocks.
 | **Attribution** | The rep (`userId`) who sent that first manual message |
 | **Two clocks** | Raw wall-clock + business-hours-adjusted (Mon–Sun 8am–6pm US/Central) |
 
+## Per-rep drill-in
+
+Click a rep in the dashboard to open their personal page. Metrics cover the
+**cohort of leads that rep received in the selected window** (7/14/30d) and every
+manual call/text/email to them. Call activity is attributed to the rep who *made*
+each call (`message.userId`); reply/persistence to the lead's owner.
+
+| Metric | Definition |
+|---|---|
+| **Answer rate** | Calls with `status == completed` ÷ total dials |
+| **Calls > 3 min** | Calls with `meta.call.duration > 180` ÷ total dials (real conversations) |
+| **Talk time / avg length** | Sum of connected-call durations; avg over connected calls |
+| **Follow-ups by channel** | Manual calls / texts / emails sent |
+| **Persistence** | Avg touches per lead + distribution (leads with 1 / 2 / 3 / 4+ touches) |
+| **Reply rate** | Leads (owned by rep) with any inbound reply ÷ leads owned |
+| **Activity heatmap** | Day × hour of the rep's own outbound calls/texts |
+
+Computed in `speed_to_lead.py` (`_analyze_contact` collects per-lead `touches` +
+`replied`) and aggregated in `summarize.py` (`_rep_activity` → `data[win].repActivity`).
+Manual email is rare (mostly automation), so email counts are usually small.
+
 ## Architecture (why it's built this way)
 
 ```

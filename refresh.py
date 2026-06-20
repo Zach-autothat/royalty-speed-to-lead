@@ -69,7 +69,7 @@ def main():
     # High-level summary — this is what the frontend fetches. No per-lead rows,
     # no timestamps, no PII; just aggregates per window/rep. A few KB.
     import summarize
-    summary = summarize.build_summary(leads, meta)
+    summary = summarize.build_summary(leads, meta, names=names)
     with open(os.path.join(OUT, "summary.json"), "w") as fh:
         json.dump(summary, fh)
 

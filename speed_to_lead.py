@@ -22,9 +22,13 @@ _ACTIVITY_PREFIX = "TYPE_ACTIVITY"
 # (no email). Outbound + source=app guarantees a human sent it, not automation.
 _RESPONSE_CHANNELS = {"TYPE_SMS", "TYPE_CALL"}
 
+# Manual follow-up touches counted per rep (calls + texts + the rare manual email).
+# Email never stops the speed-to-lead clock, but it counts as a follow-up touch.
+_TOUCH_CHANNELS = {"TYPE_CALL": "call", "TYPE_SMS": "sms", "TYPE_EMAIL": "email"}
+
 
 def is_manual_outbound(msg):
-    """A human-sent outbound CALL or TEXT (the clock-stopper)."""
+    """A human-sent outbound CALL or TEXT (the speed-to-lead clock-stopper)."""
     if msg.get("direction") != "outbound":
         return False
     if msg.get("source") != "app":
@@ -32,23 +36,47 @@ def is_manual_outbound(msg):
     return (msg.get("messageType") or "") in _RESPONSE_CHANNELS
 
 
-def _first_manual_response(client, contact):
-    """Return (response_ms, userId, channel) for the first manual outbound after
-    the contact was created, or (None, None, None) if there isn't one yet."""
+def _analyze_contact(client, contact):
+    """Single pass over a contact's messages. Returns:
+      first   = (response_ms, userId, messageType) of the first manual call/text
+                after the contact was created, or None
+      touches = list of manual outbound touches {rep_id, ts, ch, dur, answered}
+                (calls/texts/emails; dur+answered set for calls only)
+      replied = True if the lead sent any inbound message after being created
+    """
     anchor = _to_ms(contact.get("dateAdded"))
-    best = None
+    first = None
+    touches = []
+    replied = False
     for conv in client.contact_conversations(contact["id"]):
         for m in client.conversation_messages(conv["id"]):
-            if not is_manual_outbound(m):
+            mt = m.get("messageType") or ""
+            if mt.startswith(_ACTIVITY_PREFIX) or mt == "TYPE_INTERNAL_COMMENT":
                 continue
             mms = _to_ms(m.get("dateAdded"))
             if mms is None or mms < anchor:
                 continue
-            if best is None or mms < best[0]:
-                best = (mms, m.get("userId"), m.get("messageType"))
-    if best is None:
-        return (None, None, None)
-    return best
+            direction = m.get("direction")
+            if direction == "inbound":
+                replied = True
+                continue
+            # outbound from here
+            if direction != "outbound" or m.get("source") != "app":
+                continue
+            if mt not in _TOUCH_CHANNELS:
+                continue
+            ch = _TOUCH_CHANNELS[mt]
+            dur, answered = None, None
+            if ch == "call":
+                call = (m.get("meta") or {}).get("call") or {}
+                dur = call.get("duration")
+                answered = m.get("status") == "completed"
+            touches.append({"rep_id": m.get("userId"), "ts": mms,
+                            "ch": ch, "dur": dur, "answered": answered})
+            # speed-to-lead clock stops at the first manual call or text (not email)
+            if mt in _RESPONSE_CHANNELS and (first is None or mms < first[0]):
+                first = (mms, m.get("userId"), mt)
+    return first, touches, replied
 
 
 def compute_leads(start_ms, end_ms, client=None, max_workers=8):
@@ -58,7 +86,8 @@ def compute_leads(start_ms, end_ms, client=None, max_workers=8):
 
     def work(contact):
         anchor = _to_ms(contact.get("dateAdded"))
-        resp_ms, user_id, channel = _first_manual_response(client, contact)
+        first, touches, replied = _analyze_contact(client, contact)
+        resp_ms, user_id, channel = first if first else (None, None, None)
         rep = user_id or contact.get("assignedTo")
         responded = resp_ms is not None
         return {
@@ -73,6 +102,8 @@ def compute_leads(start_ms, end_ms, client=None, max_workers=8):
             "channel": channel,
             "raw_seconds": bh.raw_seconds(anchor, resp_ms) if responded else None,
             "bh_seconds": bh.business_seconds(anchor, resp_ms) if responded else None,
+            "touches": touches,
+            "replied": replied,
         }
 
     if not contacts:
