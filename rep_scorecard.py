@@ -26,6 +26,7 @@ import json
 import os
 import statistics
 import sys
+import urllib.parse
 import urllib.request
 from datetime import datetime
 
@@ -234,69 +235,40 @@ def load_leads(leads_file=None):
     return leads
 
 
-# ---- Google Sheets push --------------------------------------------------
-def push_to_sheets(weekly, monthly, yearly, targets):
-    import gspread  # imported lazily so --preview needs no deps
-    from google.oauth2.service_account import Credentials
-
-    sheet_id = os.environ["GSHEET_ID"]
-    sa_json = os.environ.get("GOOGLE_SA_JSON")
-    info = json.loads(sa_json) if sa_json else json.load(
-        open(os.environ["GOOGLE_APPLICATION_CREDENTIALS"]))
-    creds = Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/spreadsheets"])
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(sheet_id)
-
-    existing = {ws.title for ws in sh.worksheets()}
-
-    def ensure(title, rows, cols):
-        if title in existing:
-            return sh.worksheet(title)
-        return sh.add_worksheet(title=title, rows=rows, cols=cols)
-
-    # Targets: seed ONCE, then never touch (team edits persist; we re-read them).
-    if "Targets" not in existing:
-        ws = ensure("Targets", 30, 4)
-        ws.update([["Metric", "Target", "Direction", "Notes"]] +
-                  [[t["label"], t["target"], "lower is better" if t["dir"] == "lo"
-                    else "higher is better", t["notes"]] for t in targets],
-                  value_input_option="USER_ENTERED")
-    targets = read_targets(sh, targets)
-
-    # History tabs: full overwrite each run (pure data).
-    for title, rows in (("Weekly", weekly), ("Monthly", monthly), ("Yearly", yearly)):
-        ws = ensure(title, max(50, len(rows) + 5), len(COLUMNS))
-        header = [lbl for _, lbl in COLUMNS]
-        body = [[fmt(r.get(k)) for k, _ in COLUMNS] for r in rows]
-        ws.clear()
-        ws.update([header] + body, value_input_option="USER_ENTERED")
-
-    # Scorecard: latest period per grain (we show the latest MONTH by default).
-    latest = latest_period_rows(monthly)
-    ws = ensure("Scorecard", 60, len(SCORECARD_COLUMNS))
-    header = [lbl for _, lbl in SCORECARD_COLUMNS]
-    body = [[fmt(r.get(k)) for k, _ in SCORECARD_COLUMNS] for r in latest]
-    ws.clear()
-    ws.update([header] + body, value_input_option="USER_ENTERED")
-    _apply_status_colors(sh, ws.id, len(body), SCORECARD_COLUMNS)
-    print(f"Pushed: Weekly {len(weekly)}, Monthly {len(monthly)}, Yearly {len(yearly)} rows; "
-          f"Scorecard {len(latest)} reps (latest month).")
-
-
-def read_targets(sh, defaults):
+# ---- Google Sheets push (via a sheet-bound Apps Script web app) -----------
+# No Google Cloud / service account / keys: a tiny script lives inside the sheet,
+# runs as the owner, and we POST it the computed grids. The Targets tab is seeded
+# + owned by the script; we GET it back so the team's edits drive the status lights.
+def _http_json(url, data=None):
+    headers = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
+    body = json.dumps(data).encode() if data is not None else None
+    req = urllib.request.Request(url, data=body, headers=headers,
+                                 method="POST" if data is not None else "GET")
+    with urllib.request.urlopen(req, timeout=120) as r:
+        txt = r.read().decode()
     try:
-        rows = sh.worksheet("Targets").get_all_values()[1:]
-    except Exception:
+        return json.loads(txt)
+    except ValueError:
+        return {"raw": txt[:300]}
+
+
+def fetch_targets(url, token, defaults):
+    """GET current Targets from the web app (it seeds them if absent). Falls back to
+    the in-code defaults on any error so a push never blocks on this."""
+    try:
+        res = _http_json(f"{url}?token={urllib.parse.quote(token)}")
+        rows = res.get("targets") or []
+        by_label = {t["label"]: dict(t) for t in defaults}
+        for r in rows[1:]:  # skip header row
+            if len(r) >= 2 and r[0] in by_label:
+                try:
+                    by_label[r[0]]["target"] = float(r[1])
+                except (ValueError, TypeError):
+                    pass
+        return list(by_label.values())
+    except Exception as e:
+        print(f"(could not read targets, using defaults: {e})")
         return defaults
-    by_label = {t["label"]: dict(t) for t in defaults}
-    for r in rows:
-        if len(r) >= 2 and r[0] in by_label:
-            try:
-                by_label[r[0]]["target"] = float(r[1])
-            except (ValueError, TypeError):
-                pass
-    return list(by_label.values())
 
 
 def latest_period_rows(rows):
@@ -310,22 +282,24 @@ def fmt(v):
     return "—" if v is None else v
 
 
-def _apply_status_colors(sh, ws_id, n_rows, columns):
-    """Conditional-format the Status column by text. Set once; survives data writes."""
-    col = [k for k, _ in columns].index("status")
-    rng = {"sheetId": ws_id, "startRowIndex": 1, "endRowIndex": n_rows + 1,
-           "startColumnIndex": col, "endColumnIndex": col + 1}
-    palette = [("On track", 0.82, 0.92, 0.79), ("Watch", 0.98, 0.91, 0.71),
-               ("Off track", 0.96, 0.80, 0.80), ("Low volume", 0.90, 0.90, 0.88)]
-    reqs = []
-    for text, r, g, b in palette:
-        reqs.append({"addConditionalFormatRule": {"rule": {"ranges": [rng], "booleanRule": {
-            "condition": {"type": "TEXT_EQ", "values": [{"userEnteredValue": text}]},
-            "format": {"backgroundColor": {"red": r, "green": g, "blue": b}}}}, "index": 0}})
-    try:
-        sh.batch_update({"requests": reqs})
-    except Exception as e:
-        print(f"(status colors skipped: {e})")
+def to_grid(rows, columns):
+    header = [lbl for _, lbl in columns]
+    return [header] + [[fmt(r.get(k)) for k, _ in columns] for r in rows]
+
+
+def push_webapp(weekly, monthly, yearly):
+    url = os.environ["SCORECARD_WEBAPP_URL"]
+    token = os.environ.get("SCORECARD_TOKEN", "")
+    scorecard = latest_period_rows(monthly)
+    payload = {"token": token, "tabs": {
+        "Scorecard": to_grid(scorecard, SCORECARD_COLUMNS),
+        "Weekly": to_grid(weekly, COLUMNS),
+        "Monthly": to_grid(monthly, COLUMNS),
+        "Yearly": to_grid(yearly, COLUMNS),
+    }}
+    res = _http_json(url, data=payload)
+    print(f"Pushed Weekly {len(weekly)} / Monthly {len(monthly)} / Yearly {len(yearly)} rows, "
+          f"Scorecard {len(scorecard)} reps (latest month). Response: {res}")
 
 
 # ---- main ----------------------------------------------------------------
@@ -340,18 +314,24 @@ def main():
     calls = load_calls()
     print(f"Loaded {len(leads)} leads, {len(calls)} scored calls.", flush=True)
 
-    weekly = build_table(leads, calls, wk_key, TARGETS)
-    monthly = build_table(leads, calls, mo_key, TARGETS)
-    yearly = build_table(leads, calls, yr_key, TARGETS)
+    # Use the team's live (editable) targets from the sheet when pushing.
+    targets = TARGETS
+    webapp = os.environ.get("SCORECARD_WEBAPP_URL")
+    if webapp and not preview:
+        targets = fetch_targets(webapp, os.environ.get("SCORECARD_TOKEN", ""), TARGETS)
+
+    weekly = build_table(leads, calls, wk_key, targets)
+    monthly = build_table(leads, calls, mo_key, targets)
+    yearly = build_table(leads, calls, yr_key, targets)
 
     if preview:
-        out = {"weekly": weekly, "monthly": monthly, "yearly": yearly, "targets": TARGETS}
+        out = {"weekly": weekly, "monthly": monthly, "yearly": yearly, "targets": targets}
         os.makedirs("out", exist_ok=True)
         with open("out/rep_scorecard.json", "w") as fh:
             json.dump(out, fh, indent=2)
         print("Wrote out/rep_scorecard.json (preview — no push).")
         return
-    push_to_sheets(weekly, monthly, yearly, TARGETS)
+    push_webapp(weekly, monthly, yearly)
 
 
 if __name__ == "__main__":
