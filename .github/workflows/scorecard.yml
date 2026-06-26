@@ -1,0 +1,31 @@
+name: Rep Scorecard
+
+on:
+  schedule:
+    - cron: "30 11 * * *"        # daily ~5:30am US-Central, after the call-intel run
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rep-scorecard
+  cancel-in-progress: false
+
+jobs:
+  scorecard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install tzdata        # IANA tz db for week/month/year bucketing
+      - name: Build the rep scorecard and push to Google Sheets
+        env:
+          GHL_TOKEN: ${{ secrets.GHL_TOKEN }}
+          GHL_LOCATION_ID: ${{ secrets.GHL_LOCATION_ID }}
+          CALL_ACCESS_KEY: ${{ secrets.CALL_ACCESS_KEY }}
+          SCORECARD_WEBAPP_URL: ${{ secrets.SCORECARD_WEBAPP_URL }}
+          SCORECARD_TOKEN: ${{ secrets.SCORECARD_TOKEN }}
+        run: python3 rep_scorecard.py        # computes all-time leads + calls, then pushes
