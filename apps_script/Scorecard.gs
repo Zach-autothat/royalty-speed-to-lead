@@ -297,7 +297,11 @@ function renderAll_(ss, reps) {
     ss.setActiveSheet(sh); ss.moveActiveSheet(idx++);
   });
   var tg = ss.getSheetByName("Targets"); if (tg) { ss.setActiveSheet(tg); ss.moveActiveSheet(idx++); }
-  var s1 = ss.getSheetByName("Sheet1"); if (s1 && ss.getSheets().length > 1) { try { ss.deleteSheet(s1); } catch (x) {} }
+  // Remove leftovers: the default Sheet1 and the old v1 tabs.
+  ["Sheet1", "Scorecard", "Weekly", "Monthly", "Yearly"].forEach(function (n) {
+    var sh = ss.getSheetByName(n);
+    if (sh && ss.getSheets().length > 1) { try { ss.deleteSheet(sh); } catch (x) {} }
+  });
 }
 
 // Live dropdown: re-render the page whose F1 (period) was changed.
