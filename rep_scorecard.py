@@ -155,8 +155,14 @@ def load_calls():
         return json.load(open(local)).get("calls", [])
     req = urllib.request.Request(f"{url.rstrip('/')}/?k={key}",
                                  headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read().decode()).get("calls", [])
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode()).get("calls", [])
+    except Exception as e:
+        # A bad/missing CALL_ACCESS_KEY or a transient Worker hiccup must never
+        # crash the daily job — just run without call-quality metrics this time.
+        print(f"  ! could not load Call Intel data ({e}); continuing without call-quality metrics.", flush=True)
+        return []
 
 
 def load_leads(leads_file=None):
@@ -194,6 +200,12 @@ def main():
     args = sys.argv[1:]
     preview = "--preview" in args
     leads_file = args[args.index("--leads") + 1] if "--leads" in args else None
+
+    # If the Google-Sheet push isn't wired up yet, do nothing (cleanly) rather than
+    # burn a 15-minute all-time compute and then fail. Stops the daily error email.
+    if not preview and not os.environ.get("SCORECARD_WEBAPP_URL"):
+        print("SCORECARD_WEBAPP_URL not set — scorecard push not configured yet; skipping (no error).")
+        return
 
     leads = load_leads(leads_file)
     calls = load_calls()
